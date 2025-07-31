@@ -39,8 +39,8 @@ This project aggregates monthly video performance metrics across multiple digita
 ✅ Helps identify top-performing assets, brands, and platforms for content optimization<br />
 
 
-<h2>This project is based on a simulated real-world use case. <br />
-  All dataset names and identifiers have been anonymized.</h2>
+<h2>📝 Disclaimer</h2>
+This project demonstrates a generalized data pipeline inspired by common analytics patterns. It does not use any proprietary code, datasets, or confidential logic.<br />
 
 
 ## Process Walk-Through:
