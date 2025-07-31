@@ -1,0 +1,104 @@
+-- language=sql
+config {
+  disabled: true,
+  type: "incremental",
+  schema: "reporting",
+  description: "Monthly aggregated multi-platform video performance data",
+  columns: {
+    key: "Concatenation of date, brand, and asset",
+    date: "Aggregation month",
+    project_code: "Unique media/project identifier",
+    title: "Video title",
+    brand: "Brand label",
+    platform1_impressions: "Platform 1 impressions",
+    platform1_plays: "Platform 1 plays",
+    platform1_completes: "Platform 1 completes",
+    platform1_time_watched: "Platform 1 time watched",
+    platform1_revenue_usd: "Platform 1 revenue (USD)",
+    platform2_views: "Platform 2 views",
+    platform2_watch_time_mins: "Platform 2 watch time (minutes)",
+    platform2_ad_impressions: "Platform 2 ad impressions",
+    platform2_revenue_usd: "Platform 2 revenue (USD)",
+    platform2_revenue_gbp: "Platform 2 revenue (GBP)"
+  },
+  assertions: {uniqueKey: ["key"]},
+  tags: ["video", "multi-platform", "monthly"],
+  bigquery: {
+    partitionBy: "date",
+    clusterBy: ["brand"],
+    labels: {
+      "managed-by": "portfolio"
+    }
+  }
+}
+
+pre_operations {
+  ${when(incremental(),
+    `DELETE FROM ${self()} WHERE date BETWEEN DATE_TRUNC(CURRENT_DATE()-1, MONTH) AND CURRENT_DATE()`) }
+}
+
+WITH
+base AS (
+  SELECT DISTINCT
+    LOWER(ARRAY_TO_STRING([CAST(DATE_TRUNC(date, MONTH) as STRING), b.brand, b.project_code], "")) key,
+    DATE_TRUNC(date, MONTH) date,
+    brand,
+    LOWER(project_code) project_code
+  FROM
+    UNNEST((SELECT GENERATE_DATE_ARRAY(${when(incremental(), `${constants.start_date}`, `${constants.default_start}`)}, ${constants.end_date}))) AS date
+  CROSS JOIN (
+    SELECT DISTINCT project_code, brand FROM `project.dataset.platform1` 
+    UNION ALL
+    SELECT DISTINCT video_id, brand FROM `project.dataset.platform2`
+    UNION ALL
+    SELECT DISTINCT project_code, brand FROM `project.dataset.platform3`
+    UNION ALL
+    SELECT DISTINCT project_code, brand FROM `project.dataset.platform4`
+  ) AS b
+  WHERE EXTRACT(DAY FROM date) = 1
+),
+
+platform1 AS (
+  SELECT
+    LOWER(ARRAY_TO_STRING([CAST(DATE_TRUNC(date, MONTH) AS STRING), brand, project_code], "")) key,
+    MIN(title) title,
+    MIN(publish_date) publish_date,
+    SUM(impressions) impressions,
+    SUM(revenue_gross) revenue_usd
+  FROM `project.dataset.platform1`
+  WHERE ${when(incremental(), `date BETWEEN DATE_TRUNC(CURRENT_DATE()-1, MONTH) AND CURRENT_DATE()`, `date >= '2020-10-01'`)}
+    AND impressions > 0
+  GROUP BY key
+),
+
+platform2 AS (
+  SELECT
+    LOWER(ARRAY_TO_STRING([CAST(DATE_TRUNC(date, MONTH) AS STRING), brand, video_id], "")) key,
+    MIN(title) title,
+    MIN(publish_date) publish_date,
+    SUM(views) views,
+    SUM(ad_impressions) ad_impressions,
+    SUM(earnings) earnings_usd
+  FROM `project.dataset.platform2`
+  WHERE ${when(incremental(), `date BETWEEN DATE_TRUNC(CURRENT_DATE()-1, MONTH) AND CURRENT_DATE()`, `date >= '2020-10-01'`)}
+    AND views > 0
+  GROUP BY key
+)
+
+SELECT
+  b.key,
+  b.date,
+  b.project_code,
+  b.brand,
+  COALESCE(p1.title, p2.title) AS title,
+  p1.publish_date AS p1_publish_date,
+  p1.impressions AS p1_impressions,
+  p1.revenue_usd AS p1_revenue_usd,
+  p2.publish_date AS p2_publish_date,
+  p2.views AS p2_views,
+  p2.ad_impressions AS p2_ad_impressions,
+  p2.earnings_usd AS p2_earnings_usd,
+  CAST(p2.earnings_usd / 1.55 AS NUMERIC) AS p2_earnings_gbp
+FROM base b
+LEFT JOIN platform1 p1 ON b.key = p1.key
+LEFT JOIN platform2 p2 ON b.key = p2.key
